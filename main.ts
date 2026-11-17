@@ -7,21 +7,36 @@
 // the trial ends. The launcher forwards signals and mirrors the exit code.
 
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const binary = join(here, 'forge');
+const committed = join(here, 'forge');
 
-if (!existsSync(binary)) {
+if (!existsSync(committed)) {
   process.stderr.write('[entry] forge binary is missing next to main.ts\n');
   process.exit(1);
 }
+
+// The grading pod may mount the entry read-only with the binary's exec bit
+// cleared (a web-uploaded repo flattens modes to 0644): chmod on the
+// committed file then fails and spawning it dies with EACCES. Always run a
+// private copy from a writable temp dir instead.
+let binary = committed;
 try {
-  chmodSync(binary, 0o755);
+  const dir = mkdtempSync(join(tmpdir(), 'forge-'));
+  const copy = join(dir, 'forge');
+  copyFileSync(committed, copy);
+  chmodSync(copy, 0o755);
+  binary = copy;
 } catch {
-  // the committed binary normally keeps its exec bit; ignore failures
+  try {
+    chmodSync(committed, 0o755);
+  } catch {
+    // last resort: spawn the committed path and let the error surface
+  }
 }
 
 const child = spawn(binary, [], { stdio: 'inherit', env: process.env });
